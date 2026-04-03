@@ -12,7 +12,7 @@
         * { font-family: 'Inter', sans-serif; }
         body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
         .glass-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
-        .event-item { transition: all 0.2s ease; }
+        .event-item { transition: all 0.2s ease; cursor: pointer; }
         .event-item:hover { transform: translateX(4px); background: #faf5ff; }
         .stat-card { transition: all 0.2s; }
         .stat-card:hover { transform: translateY(-2px); }
@@ -31,6 +31,11 @@
         }
         .calendar-day.today {
             background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            font-weight: bold;
+        }
+        .calendar-day.active-filter {
+            background: #d8b4fe;
             color: white;
             font-weight: bold;
         }
@@ -92,9 +97,14 @@
                 <div id="calendarGrid" class="grid grid-cols-7 gap-1 text-center text-sm">
                     <!-- Calendar days will be injected here -->
                 </div>
-                <p class="text-xs text-gray-400 text-center mt-3">
-                    <i class="fas fa-info-circle mr-1"></i> Click any date to jump to events on that day
-                </p>
+                <div class="flex justify-between items-center mt-3">
+                    <p class="text-xs text-gray-400">
+                        <i class="fas fa-info-circle mr-1"></i> Click date to filter events
+                    </p>
+                    <button id="clearFilterBtn" class="text-xs text-purple-600 hover:text-purple-800 font-medium">
+                        <i class="fas fa-times-circle mr-1"></i> Clear Filter
+                    </button>
+                </div>
             </div>
 
             <!-- Search Bar -->
@@ -113,6 +123,7 @@
         <div class="p-6">
             <h2 class="text-lg font-semibold text-gray-700 mb-4 flex items-center gap-2">
                 <i class="fas fa-list-ul text-purple-500"></i> Your Events
+                <span id="filterBadge" class="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full hidden"></span>
             </h2>
             <div id="eventsContainer" class="space-y-3 max-h-96 overflow-y-auto pr-2">
                 <div class="text-center text-gray-400 py-12">
@@ -175,6 +186,7 @@
     let events = [];
     let currentEditId = null;
     let searchQuery = '';
+    let currentDateFilter = null; // Stores selected date for filtering
     
     // Calendar state
     let currentCalendarDate = new Date();
@@ -191,6 +203,8 @@
             tomorrow.setDate(today.getDate() + 1);
             const nextWeek = new Date(today);
             nextWeek.setDate(today.getDate() + 5);
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
             
             events = [
                 {
@@ -227,7 +241,8 @@
     function saveData() {
         localStorage.setItem('tempus_events', JSON.stringify(events));
         renderAll();
-        renderCalendar(); // Refresh calendar to show event dots
+        renderCalendar();
+        updateStats();
     }
 
     function showToast(message, type = 'success') {
@@ -243,21 +258,50 @@
         updateStats();
     }
 
-    function renderEvents() {
-        const container = document.getElementById('eventsContainer');
-        let filteredEvents = events;
+    function getFilteredEvents() {
+        let filtered = [...events];
         
+        // Apply date filter first
+        if (currentDateFilter) {
+            filtered = filtered.filter(e => e.date === currentDateFilter);
+        }
+        
+        // Then apply search filter
         if (searchQuery) {
-            filteredEvents = events.filter(e => 
+            filtered = filtered.filter(e => 
                 e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                 (e.description && e.description.toLowerCase().includes(searchQuery.toLowerCase()))
             );
         }
         
+        return filtered;
+    }
+
+    function renderEvents() {
+        const container = document.getElementById('eventsContainer');
+        const filteredEvents = getFilteredEvents();
+        
+        // Show filter badge
+        const filterBadge = document.getElementById('filterBadge');
+        if (currentDateFilter) {
+            filterBadge.innerHTML = `<i class="fas fa-filter mr-1"></i> Filtered: ${formatDate(currentDateFilter)}`;
+            filterBadge.classList.remove('hidden');
+        } else if (searchQuery) {
+            filterBadge.innerHTML = `<i class="fas fa-search mr-1"></i> Search: "${searchQuery}"`;
+            filterBadge.classList.remove('hidden');
+        } else {
+            filterBadge.classList.add('hidden');
+        }
+        
         if (filteredEvents.length === 0) {
+            let message = 'No events found.';
+            if (currentDateFilter) message = `No events on ${formatDate(currentDateFilter)}. Click "Clear Filter" to see all.`;
+            else if (searchQuery) message = `No events matching "${searchQuery}".`;
+            else message = 'No events yet. Click "New Event" to begin.';
+            
             container.innerHTML = `<div class="text-center text-gray-400 py-12">
-                <i class="fas fa-search text-4xl mb-3 opacity-50"></i>
-                <p>${searchQuery ? 'No matching events found' : 'No events yet. Click "New Event" to begin.'}</p>
+                <i class="fas fa-calendar-day text-4xl mb-3 opacity-50"></i>
+                <p>${message}</p>
             </div>`;
             return;
         }
@@ -327,6 +371,15 @@
         document.getElementById('completedEvents').innerText = completed;
     }
 
+    function clearFilter() {
+        currentDateFilter = null;
+        searchQuery = '';
+        document.getElementById('searchInput').value = '';
+        renderEvents();
+        renderCalendar(); // Refresh calendar highlight
+        showToast('Filter cleared', 'success');
+    }
+
     // ---------- CALENDAR FUNCTIONS ----------
     function renderCalendar() {
         const year = currentCalendarDate.getFullYear();
@@ -359,24 +412,27 @@
         for (let day = 1; day <= daysInMonth; day++) {
             const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
             const isToday = dateStr === todayStr;
-            
+            const isActiveFilter = currentDateFilter === dateStr;
             const hasEvent = events.some(e => e.date === dateStr);
             
             const dayDiv = document.createElement('div');
-            dayDiv.className = `calendar-day py-2 rounded-full transition ${isToday ? 'today' : 'hover:bg-purple-100'} ${hasEvent ? 'font-bold' : ''}`;
-            dayDiv.innerHTML = `<span class="${hasEvent && !isToday ? 'text-purple-600' : ''}">${day}</span>`;
+            dayDiv.className = `calendar-day py-2 rounded-full transition ${isToday ? 'today' : ''} ${isActiveFilter ? 'active-filter' : ''} ${hasEvent ? 'font-bold' : ''}`;
+            dayDiv.innerHTML = `<span>${day}</span>`;
             
             // Add event dot indicator
-            if (hasEvent && !isToday) {
+            if (hasEvent && !isToday && !isActiveFilter) {
                 dayDiv.innerHTML += `<div class="w-1 h-1 bg-purple-500 rounded-full mx-auto mt-0.5"></div>`;
             }
             
             // Click to filter events by this date
-            dayDiv.addEventListener('click', () => {
-                document.getElementById('searchInput').value = dateStr;
-                searchQuery = dateStr;
+            dayDiv.addEventListener('click', (e) => {
+                e.stopPropagation();
+                currentDateFilter = dateStr;
+                searchQuery = '';
+                document.getElementById('searchInput').value = '';
                 renderEvents();
-                showToast(`Showing events on ${dateStr}`, 'success');
+                renderCalendar();
+                showToast(`Showing events on ${formatDate(dateStr)}`, 'success');
             });
             
             grid.appendChild(dayDiv);
@@ -497,8 +553,13 @@
     // Search functionality
     document.getElementById('searchInput').addEventListener('input', (e) => {
         searchQuery = e.target.value;
+        currentDateFilter = null; // Clear date filter when searching
         renderEvents();
+        renderCalendar(); // Refresh calendar highlight
     });
+
+    // Clear filter button
+    document.getElementById('clearFilterBtn').addEventListener('click', clearFilter);
 
     // Calendar navigation
     document.getElementById('prevMonth').addEventListener('click', prevMonth);
